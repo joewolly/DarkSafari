@@ -1,5 +1,7 @@
 # DarkSafari
 
+[![CI](https://github.com/joewolly/DarkSafari/actions/workflows/ci.yml/badge.svg)](https://github.com/joewolly/DarkSafari/actions/workflows/ci.yml)
+
 Free, open-source dark mode for every website in Safari on **Mac, iPhone and iPad**.
 
 - **Automatic.** Follows your system appearance, and switches live when it changes.
@@ -7,6 +9,8 @@ Free, open-source dark mode for every website in Safari on **Mac, iPhone and iPa
 - **No white flash.** Pages start dark while they load.
 - **Per-site control.** Turn it off (or on) for any site.
 - **Gentle on images.** Photos and videos are dimmed slightly, which you can switch off.
+- **Tuned for popular sites.** Includes Dark Reader's community-maintained fixes for thousands of sites.
+- **Embedded content too.** Comment widgets, embeds and other frames are darkened along with the page.
 
 DarkSafari is a userscript. It runs inside [Userscripts](https://github.com/quoid/userscripts), a free, open-source Safari extension. You don't need a paid app or an Apple Developer account. The theming engine is [Dark Reader](https://github.com/darkreader/darkreader)'s (MIT), bundled into the script.
 
@@ -38,8 +42,9 @@ In the panel you can:
 ## Limitations
 
 - Userscripts has to be allowed on all websites for DarkSafari to reach every page.
-- Settings are saved asynchronously. When your system is in light mode but DarkSafari is set to **On**, pages can briefly flash light before they darken.
-- Frames inside pages (embedded widgets, comments) aren't darkened.
+- The first time you visit a site with DarkSafari set to **On** while your system is in light mode, the page can briefly flash light. After that, DarkSafari remembers the site and starts dark straight away.
+- To start pages dark instantly, DarkSafari saves a tiny note of its last decision (key `darksafari:v1`) in each site's local storage. That site can read it.
+- The script is about 1 MB, mostly Dark Reader's site fixes. Only the fixes that match the current page are decoded.
 - Userscripts has no menu-command API, which is why the panel opens with a shortcut or gesture instead of a menu item.
 
 ## Development
@@ -58,9 +63,14 @@ npm test           # builds, then runs Playwright tests in Chromium
 | `src/settings.ts` | Settings stored with `GM.getValue` / `GM.setValue` |
 | `src/fetch.ts` | Lets Dark Reader read cross-origin stylesheets via `GM.xmlHttpRequest` |
 | `src/panel.ts` | The settings panel and its shortcut and gesture |
+| `src/snapshot.ts` | Per-site copy of the last decision, read synchronously at page start |
+| `src/fixes.ts` | Finds and merges the Dark Reader site fixes that match the page |
+| `scripts/fixes.mjs` | Build step: compacts and indexes `vendor/dynamic-theme-fixes.config` |
 | `src/header.txt` | Userscript metadata block |
 
-`dist/` is committed so the install link always points at a built script. Rebuild before committing source changes. To release, bump `version` in `package.json` and rebuild; Userscripts updates installed copies when the version goes up.
+`dist/` is committed so the install link always points at a built script. Rebuild before committing source changes; CI fails if `dist/` doesn't match the source. To release, bump `version` in `package.json` and rebuild. Userscripts updates installed copies when the version goes up.
+
+To pull in Dark Reader's latest site fixes, run `npm run update-fixes && npm run build`.
 
 ## Credits and license
 
