@@ -1,5 +1,6 @@
 import { disable as disableEngine, enable as enableEngine, setFetchMethod } from 'darkreader';
 import { startBlendFix, stopBlendFix } from './blend';
+import { startContrastFix, stopContrastFix } from './contrast';
 import { isNativelyDark } from './detect';
 import { gmFetch } from './fetch';
 import { emptyFix, getFixFor, type SiteFix } from './fixes';
@@ -143,12 +144,16 @@ function apply() {
         console.error('DarkSafari: could not start the dark theme', error);
       }
     }
-    if (engineOn) startBlendFix();
+    if (engineOn) {
+      startBlendFix();
+      startContrastFix(TEXT);
+    }
     // Dark Reader paints its own fallback background from here on.
     removeAntiFlash();
   } else {
     if (engineOn) disableEngine();
     stopBlendFix();
+    stopContrastFix();
     engineOn = false;
     engineDim = null;
     removeAntiFlash();

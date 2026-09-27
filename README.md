@@ -69,6 +69,7 @@ npm test           # builds, then runs Playwright tests in Chromium
 |---|---|
 | `src/main.ts` | Decides whether to darken, starts/stops the engine, anti-flash, live updates |
 | `src/blend.ts` | Undoes `multiply`-style blend modes on images, which turn them black on a dark page |
+| `src/contrast.ts` | Lightens text that ends up too close to its dark background |
 | `src/detect.ts` | Detects pages that already look dark (measured with our styles switched off) |
 | `src/settings.ts` | Settings stored with `GM.getValue` / `GM.setValue` |
 | `src/fetch.ts` | Lets Dark Reader read cross-origin stylesheets via `GM.xmlHttpRequest` |
