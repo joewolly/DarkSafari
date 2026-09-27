@@ -172,6 +172,25 @@ test.describe('system dark', () => {
     expect(await blend('direct')).toBe('darken');
   });
 
+  test('makes low-contrast text on dark backgrounds readable', async ({ page }) => {
+    const contrast = (id: string) =>
+      page.evaluate((i) => {
+        const lum = (s: string) => {
+          const [r, g, b] = s.match(/[\d.]+/g)!.map(Number).map((v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const cs = getComputedStyle(document.getElementById(i)!);
+        const a = lum(cs.color);
+        const b = lum(cs.backgroundColor);
+        return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+      }, id);
+    await install(page);
+    await page.goto(url('badge.html'));
+    await expect.poll(() => hasEngineStyles(page)).toBe(true);
+    await expect.poll(() => contrast('badge')).toBeGreaterThan(3);
+    expect(await page.evaluate(() => document.getElementById('ok')!.hasAttribute('data-darksafari-contrast'))).toBe(false);
+  });
+
   test('reads cross-origin stylesheets through GM.xmlHttpRequest', async ({ page }) => {
     await install(page);
     await page.goto(url('crossorigin.html'));
