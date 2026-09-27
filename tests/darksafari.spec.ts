@@ -154,6 +154,24 @@ test.describe('system dark', () => {
     await expect.poll(() => hasEngineStyles(page)).toBe(true);
   });
 
+  test('undoes darkening blend modes on images, including ones added later', async ({ page }) => {
+    const blend = (id: string) => page.evaluate((i) => {
+      const el = document.getElementById(i);
+      return el && getComputedStyle(el).mixBlendMode;
+    }, id);
+    await install(page);
+    await page.goto(url('blend.html'));
+    await expect.poll(() => blend('wrapped')).toBe('normal');
+    await expect.poll(() => blend('direct')).toBe('normal');
+    await expect.poll(() => blend('late')).toBe('normal');
+
+    // Turning the site off restores the page's own blend modes.
+    await page.keyboard.press('Control+Alt+KeyD');
+    await page.locator('darksafari-panel').locator('button.site').click();
+    await expect.poll(() => blend('wrapped')).toBe('multiply');
+    expect(await blend('direct')).toBe('darken');
+  });
+
   test('reads cross-origin stylesheets through GM.xmlHttpRequest', async ({ page }) => {
     await install(page);
     await page.goto(url('crossorigin.html'));
