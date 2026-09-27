@@ -2,8 +2,8 @@
  * Sites like Amazon blend product photos into a light-grey tile with
  * `mix-blend-mode: multiply`, so the photos' white backgrounds disappear. Once the tile
  * is dark, multiply can only darken, and the photo (plus any badges in the same tile)
- * turns almost black. While a page is darkened, find images whose element or nearby
- * ancestors use a darkening blend mode, and switch those elements back to normal.
+ * turns almost black. While a page is darkened, find images and text whose element or
+ * nearby ancestors use a darkening blend mode, and switch those elements back to normal.
  */
 
 const ATTR = 'data-darksafari-blend';
@@ -36,6 +36,12 @@ function flush() {
     if (!node.isConnected) continue;
     if (node.matches(MEDIA)) check(node);
     node.querySelectorAll(MEDIA).forEach(check);
+    // Some tiles blend their text area separately from the image (light text
+    // multiplied onto a dark tile nearly vanishes), so look up from text too.
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+      if (t.parentElement && t.nodeValue?.trim()) check(t.parentElement);
+    }
   }
 }
 
