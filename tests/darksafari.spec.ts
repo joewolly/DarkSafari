@@ -9,14 +9,18 @@ const SCRIPT = readFileSync(join(__dirname, '..', 'dist', 'darksafari.user.js'),
 const FIXTURES = join(__dirname, 'fixtures');
 
 /**
- * The script the way the Userscripts extension runs it: metadata stripped, wrapped in an
- * async function, and run with `Function` in the content world, with GM passed in as a
- * parameter rather than a global. (See quoid/userscripts entry-userscripts.js.)
+ * The script the way the Userscripts extension runs it: metadata stripped and run with
+ * `Function` in the content world, with GM passed in as a destructured parameter rather
+ * than a global. Newer Userscripts versions wrap the code in an async function first;
+ * older ones (the App Store build users have) use it as the function body directly.
+ * (See quoid/userscripts entry-userscripts.js.)
  */
-function asUserscriptsInjects(script: string): string {
+function asUserscriptsInjects(script: string, wrap: boolean): string {
   const code = script.replace(/^[\s\S]*?\/\/ ==\/UserScript==/, '').trim();
-  const wrapped = `(async () => {\n\ttry {\n// ===UserScript===start===\n${code}\n// ===UserScript====end====\n\t} catch (error) {\n\t\tconsole.error('darksafari.user.js', error);\n\t}\n})(); //# sourceURL=darksafari.user.js`;
-  return `(() => { const GM = window.GM; delete window.GM; Function('{GM,GM_info}', ${JSON.stringify(wrapped)})({ GM, GM_info: {} }); })();`;
+  const body = wrap
+    ? `(async () => {\n\ttry {\n// ===UserScript===start===\n${code}\n// ===UserScript====end====\n\t} catch (error) {\n\t\tconsole.error('darksafari.user.js', error);\n\t}\n})(); //# sourceURL=darksafari.user.js`
+    : code;
+  return `(() => { const GM = window.GM; delete window.GM; try { Function('{GM,GM_info}', ${JSON.stringify(body)})({ GM, GM_info: {} }); } catch (e) { console.error('inject failed', e); } })();`;
 }
 
 const SITE = 'https://www.example.com';
@@ -86,20 +90,25 @@ const storedSettings = async (page: Page): Promise<any> => stores.get(page)!.set
 
 test('script stays small', () => {
   // Userscripts sends the whole script through Safari's native messaging for every
-  // frame of every page. v0.2.0 was over 1 MB and didn't run in Safari for users.
+  // frame of every page, so keep it small.
   expect(SCRIPT.length).toBeLessThan(600 * 1024);
 });
 
 test.describe('system dark', () => {
   test.use({ colorScheme: 'dark' });
 
-  test('works when injected the way Userscripts does it', async ({ page }) => {
-    await install(page, {}, 0, asUserscriptsInjects(SCRIPT));
-    await page.goto(url('light.html'));
-    await expect.poll(() => bgLuminance(page)).toBeLessThan(0.05);
-    await page.keyboard.press('Control+Alt+KeyD');
-    await expect(page.locator('darksafari-panel')).toHaveCount(1);
-  });
+  for (const wrap of [false, true]) {
+    test(`works when injected the way Userscripts does it (${wrap ? 'wrapped' : 'as function body'})`, async ({ page }) => {
+      const errors: string[] = [];
+      page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+      await install(page, {}, 0, asUserscriptsInjects(SCRIPT, wrap));
+      await page.goto(url('light.html'));
+      await expect.poll(() => bgLuminance(page)).toBeLessThan(0.05);
+      await page.keyboard.press('Control+Alt+KeyD');
+      await expect(page.locator('darksafari-panel')).toHaveCount(1);
+      expect(errors).toEqual([]);
+    });
+  }
 
   test('darkens a light page', async ({ page }) => {
     await install(page);

@@ -43,7 +43,7 @@ In the panel you can:
 
 If pages stay light or **Ctrl + Option + D** does nothing:
 
-1. Make sure you're on DarkSafari **0.2.1 or later**. In the Userscripts popup, click **Open Extension Page** and check the version in DarkSafari's header. If it's older, reinstall it from the link above. Version 0.2.0 was too large for Userscripts to inject in Safari.
+1. Make sure you're on DarkSafari **0.2.2 or later**. In the Userscripts popup, click **Open Extension Page** and check the version in DarkSafari's header. If it's older, reinstall it from the link above. Earlier versions didn't run at all with the App Store version of Userscripts: the console showed `SyntaxError: 'use strict' directive not allowed inside a function with a non-simple parameter list`.
 2. Check that Userscripts is allowed on all websites: Safari → Settings → Extensions → Userscripts → **Edit Websites…** → set "Other Websites" to **Allow**.
 3. Click the page itself before pressing the shortcut, so it isn't going to the address bar.
 4. If it still doesn't work, turn on Safari → Settings → Advanced → "Show features for web developers". Then open Develop → Show JavaScript Console on the page. Look for an `Injecting: DarkSafari` line or a DarkSafari error, and include it when you [open an issue](https://github.com/joewolly/DarkSafari/issues).

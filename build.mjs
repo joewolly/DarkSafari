@@ -27,9 +27,18 @@ const result = await build({
   define: { chrome: '__darksafariChrome', 'window.chrome': '__darksafariChrome' },
 });
 
+// esbuild puts "use strict" at the very top. Some Userscripts versions run the script as
+// the body of Function('{GM,GM_info}', code), and a function with a destructured
+// parameter can't start with "use strict", so Safari refuses to run the script at all.
+// Move the directive inside the bundle's own function, where it's allowed.
+const STRICT_IIFE = '"use strict";(()=>{';
+let bundle = result.outputFiles[0].text;
+if (!bundle.startsWith(STRICT_IIFE)) throw new Error(`Unexpected bundle start: ${bundle.slice(0, 40)}`);
+bundle = '(()=>{"use strict";' + bundle.slice(STRICT_IIFE.length);
+
 await mkdir('dist', { recursive: true });
 const banner = `${header}\n\n// DarkSafari v${version} — https://github.com/joewolly/DarkSafari (MIT)\n// Bundles Dark Reader (https://github.com/darkreader/darkreader), MIT License, Copyright (c) Dark Reader Ltd.\n\n`;
-await writeFile('dist/darksafari.user.js', banner + result.outputFiles[0].text);
+await writeFile('dist/darksafari.user.js', banner + bundle);
 await writeFile('dist/darksafari.meta.js', header + '\n');
 const kb = (n) => `${Math.round(n / 1024)} KB`;
-console.log(`Built dist/darksafari.user.js (v${version}, ${kb(result.outputFiles[0].text.length + banner.length)}; site fixes: ${fixes.stats.blocks} blocks, ${kb(fixes.stats.bytes)})`);
+console.log(`Built dist/darksafari.user.js (v${version}, ${kb(bundle.length + banner.length)}; site fixes: ${fixes.stats.blocks} blocks, ${kb(fixes.stats.bytes)})`);
