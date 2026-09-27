@@ -8,6 +8,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = readFileSync(join(__dirname, '..', 'dist', 'darksafari.user.js'), 'utf8');
 const FIXTURES = join(__dirname, 'fixtures');
 
+/**
+ * The script the way the Userscripts extension runs it: metadata stripped, wrapped in an
+ * async function, and run with `Function` in the content world, with GM passed in as a
+ * parameter rather than a global. (See quoid/userscripts entry-userscripts.js.)
+ */
+function asUserscriptsInjects(script: string): string {
+  const code = script.replace(/^[\s\S]*?\/\/ ==\/UserScript==/, '').trim();
+  const wrapped = `(async () => {\n\ttry {\n// ===UserScript===start===\n${code}\n// ===UserScript====end====\n\t} catch (error) {\n\t\tconsole.error('darksafari.user.js', error);\n\t}\n})(); //# sourceURL=darksafari.user.js`;
+  return `(() => { const GM = window.GM; delete window.GM; Function('{GM,GM_info}', ${JSON.stringify(wrapped)})({ GM, GM_info: {} }); })();`;
+}
+
 const SITE = 'https://www.example.com';
 const CDN = 'https://cdn.example.net';
 const HOST = 'example.com';
@@ -23,7 +34,7 @@ function fixture(url: string): { body: string; type: string } | null {
 }
 
 /** Install an in-memory GM API (like the Userscripts extension provides), then the userscript. */
-async function install(page: Page, settings: Record<string, unknown> = {}, gmDelayMs = 0) {
+async function install(page: Page, settings: Record<string, unknown> = {}, gmDelayMs = 0, script = SCRIPT) {
   // GM.xmlHttpRequest runs outside the page (no CORS), like the real extension.
   await page.route(/^https:\/\//, (route) => {
     const f = fixture(route.request().url());
@@ -55,7 +66,7 @@ async function install(page: Page, settings: Record<string, unknown> = {}, gmDel
       },
     };
   }, gmDelayMs);
-  await page.addInitScript(SCRIPT);
+  await page.addInitScript(script);
 }
 
 const url = (name: string) => `${SITE}/${name}`;
@@ -73,8 +84,22 @@ const hasEngineStyles = (page: Page) => page.evaluate(() => !!document.querySele
 const stores = new WeakMap<Page, Record<string, unknown>>();
 const storedSettings = async (page: Page): Promise<any> => stores.get(page)!.settings;
 
+test('script stays small', () => {
+  // Userscripts sends the whole script through Safari's native messaging for every
+  // frame of every page. v0.2.0 was over 1 MB and didn't run in Safari for users.
+  expect(SCRIPT.length).toBeLessThan(600 * 1024);
+});
+
 test.describe('system dark', () => {
   test.use({ colorScheme: 'dark' });
+
+  test('works when injected the way Userscripts does it', async ({ page }) => {
+    await install(page, {}, 0, asUserscriptsInjects(SCRIPT));
+    await page.goto(url('light.html'));
+    await expect.poll(() => bgLuminance(page)).toBeLessThan(0.05);
+    await page.keyboard.press('Control+Alt+KeyD');
+    await expect(page.locator('darksafari-panel')).toHaveCount(1);
+  });
 
   test('darkens a light page', async ({ page }) => {
     await install(page);

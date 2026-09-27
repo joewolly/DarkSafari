@@ -39,12 +39,21 @@ In the panel you can:
 - set the mode for all sites: **Auto** (follow the system), **On** (always dark) or **Off**;
 - toggle **Dim images slightly**.
 
+## Troubleshooting (Mac)
+
+If pages stay light or **Ctrl + Option + D** does nothing:
+
+1. Make sure you're on DarkSafari **0.2.1 or later**. In the Userscripts popup, click **Open Extension Page** and check the version in DarkSafari's header. If it's older, reinstall it from the link above. Version 0.2.0 was too large for Userscripts to inject in Safari.
+2. Check that Userscripts is allowed on all websites: Safari → Settings → Extensions → Userscripts → **Edit Websites…** → set "Other Websites" to **Allow**.
+3. Click the page itself before pressing the shortcut, so it isn't going to the address bar.
+4. If it still doesn't work, turn on Safari → Settings → Advanced → "Show features for web developers". Then open Develop → Show JavaScript Console on the page. Look for an `Injecting: DarkSafari` line or a DarkSafari error, and include it when you [open an issue](https://github.com/joewolly/DarkSafari/issues).
+
 ## Limitations
 
 - Userscripts has to be allowed on all websites for DarkSafari to reach every page.
 - The first time you visit a site with DarkSafari set to **On** while your system is in light mode, the page can briefly flash light. After that, DarkSafari remembers the site and starts dark straight away.
 - To start pages dark instantly, DarkSafari saves a tiny note of its last decision (key `darksafari:v1`) in each site's local storage. That site can read it.
-- The script is about 1 MB, mostly Dark Reader's site fixes. Only the fixes that match the current page are decoded.
+- The script is about 420 KB. Most of that is Dark Reader's engine and its site fixes, which are stored compressed. Only the fixes that match the current page are used.
 - Userscripts has no menu-command API, which is why the panel opens with a shortcut or gesture instead of a menu item.
 
 ## Development

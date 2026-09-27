@@ -1,12 +1,16 @@
 /**
  * Turns Dark Reader's dynamic-theme-fixes.config into a compact module:
  *   COMMON – the "*" fix that applies to every site (JSON string)
- *   BLOCKS – one JSON string per site fix, decoded only when a page matches it
- *   INDEX  – "\nhost\t1,2,3\n..." lookup text, searched with indexOf (no parsing)
+ *   PACKED – base64 of the deflate-raw compressed JSON [DATA, OFFSETS, INDEX]:
+ *     DATA    – every site fix back to back; DATA.slice(OFFSETS[i], OFFSETS[i + 1]) is block i
+ *     INDEX   – "\nhost\t1,2,3\n..." lookup text, searched with indexOf (no parsing)
  *   WILD   – blocks whose patterns can't be keyed by host (regexps, "google.*")
- * so each page only pays for the handful of fixes that match it.
+ * Only the handful of blocks that match a page are parsed. The fixes are compressed
+ * because Userscripts sends the whole script through Safari's native messaging for
+ * every frame of every page; a large script there can fail to inject at all.
  */
 import { readFile } from 'node:fs/promises';
+import { deflateRawSync } from 'node:zlib';
 
 /** Normalise a block: trim every line and drop blank lines inside sections. */
 function compactBlock(text) {
@@ -63,11 +67,10 @@ export async function buildFixesModule(path) {
   offsets.push(data.length);
 
   const indexText = '\n' + [...index].map(([k, v]) => `${k}\t${v.join(',')}`).join('\n') + '\n';
+  const packed = deflateRawSync(JSON.stringify([data, offsets, indexText]), { level: 9 }).toString('base64');
   const code =
     `export const COMMON = ${JSON.stringify(common.text)};\n` +
-    `export const DATA = ${JSON.stringify(data)};\n` +
-    `export const OFFSETS = ${JSON.stringify(offsets)};\n` +
-    `export const INDEX = ${JSON.stringify(indexText)};\n` +
+    `export const PACKED = ${JSON.stringify(packed)};\n` +
     `export const WILD = ${JSON.stringify(wild)};\n`;
   return { code, stats: { blocks: blocks.length, keys: index.size, wild: wild.length, bytes: code.length } };
 }

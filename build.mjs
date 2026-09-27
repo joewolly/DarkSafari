@@ -21,6 +21,7 @@ const result = await build({
   format: 'iife',
   target: 'safari15',
   write: false,
+  minify: true,
   legalComments: 'inline',
   inject: ['src/chrome-shim.ts'],
   define: { chrome: '__darksafariChrome', 'window.chrome': '__darksafariChrome' },

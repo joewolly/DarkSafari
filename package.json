@@ -1,6 +1,6 @@
 {
   "name": "darksafari",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Free, open-source dark mode for Safari (macOS + iOS) as a userscript, powered by the Dark Reader engine.",
   "license": "MIT",

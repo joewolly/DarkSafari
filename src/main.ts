@@ -1,7 +1,7 @@
 import { disable as disableEngine, enable as enableEngine, setFetchMethod } from 'darkreader';
 import { isNativelyDark } from './detect';
 import { gmFetch } from './fetch';
-import { getFixFor, type SiteFix } from './fixes';
+import { emptyFix, getFixFor, type SiteFix } from './fixes';
 import { installPanel } from './panel';
 import { loadSettings, normalizeHost, setMember, updateSettings, type Mode, type Settings } from './settings';
 import { readSnapshot, settingsFromSnapshot, writeSnapshot, type Snapshot } from './snapshot';
@@ -87,6 +87,7 @@ let nativeDark = false;
 let engineOn = false;
 let engineDim: boolean | null = null;
 let siteFix: SiteFix | null = null;
+let siteFixLoading: Promise<void> | null = null;
 let panel: { refresh(): void } | null = null;
 
 function wantsDark(): boolean {
@@ -108,17 +109,38 @@ function reason(): string {
   return 'Darkened automatically.';
 }
 
-function engineFix(dim: boolean): SiteFix {
-  siteFix ??= getFixFor(location.href);
-  return dim ? { ...siteFix, css: `${siteFix.css}\n${DIM_CSS}` } : siteFix;
+/** Site fixes are stored compressed; unpack them (once) before the engine first starts. */
+function loadSiteFix(): Promise<void> {
+  siteFixLoading ??= getFixFor(location.href)
+    .catch((error) => {
+      console.error('DarkSafari: could not load site fixes', error);
+      return emptyFix();
+    })
+    .then((fix) => {
+      siteFix = fix;
+    });
+  return siteFixLoading;
+}
+
+function engineFix(fix: SiteFix, dim: boolean): SiteFix {
+  return dim ? { ...fix, css: `${fix.css}\n${DIM_CSS}` } : fix;
 }
 
 function apply() {
   if (shouldDarken()) {
+    if (!siteFix) {
+      // The anti-flash background stays up until the fixes are ready (a few ms).
+      void loadSiteFix().then(apply);
+      return;
+    }
     if (!engineOn || engineDim !== settings.dimImages) {
-      enableEngine(THEME, engineFix(settings.dimImages));
-      engineOn = true;
-      engineDim = settings.dimImages;
+      try {
+        enableEngine(THEME, engineFix(siteFix, settings.dimImages));
+        engineOn = true;
+        engineDim = settings.dimImages;
+      } catch (error) {
+        console.error('DarkSafari: could not start the dark theme', error);
+      }
     }
     // Dark Reader paints its own fallback background from here on.
     removeAntiFlash();
@@ -185,14 +207,17 @@ async function change(fn: (s: Settings) => void) {
 function startEarly() {
   const snap = isTop ? readSnapshot() : null;
   if (!snap) {
-    if (systemDark.matches) addAntiFlash();
+    if (systemDark.matches) {
+      addAntiFlash();
+      void loadSiteFix();
+    }
     return;
   }
   settings = settingsFromSnapshot(snap, host);
   nativeDark = snap.site === 'dark';
   if (!shouldDarken()) return;
   addAntiFlash();
-  void rootReady().then(() => {
+  void Promise.all([rootReady(), loadSiteFix()]).then(() => {
     if (!settingsLoaded) apply();
   });
 }
@@ -205,7 +230,34 @@ async function main() {
 
   settings = await loadSettings();
   settingsLoaded = true;
-  if (isTop) nativeDark = settings.darkHosts.includes(host);
+  if (isTop) {
+    nativeDark = settings.darkHosts.includes(host);
+    // Set up the panel first, so its shortcut works even if darkening fails.
+    panel = installPanel({
+      getState: () => ({ host, mode: settings.mode, dimImages: settings.dimImages, active: engineOn, reason: reason() }),
+      toggleSite: () =>
+        change((s) => {
+          if (engineOn) {
+            s.disabledHosts = setMember(s.disabledHosts, host, true);
+            s.forcedHosts = setMember(s.forcedHosts, host, false);
+          } else {
+            const wasDisabled = s.disabledHosts.includes(host);
+            s.disabledHosts = setMember(s.disabledHosts, host, false);
+            // Removing a block is enough if the site would be darkened anyway; otherwise force it.
+            const darkenedNow = s.mode !== 'off' && (s.mode === 'on' || (s.mode === 'auto' && systemDark.matches)) && !nativeDark;
+            if (!wasDisabled || !darkenedNow) s.forcedHosts = setMember(s.forcedHosts, host, true);
+          }
+        }),
+      setMode: (mode: Mode) =>
+        change((s) => {
+          s.mode = mode;
+        }),
+      setDimImages: (on: boolean) =>
+        change((s) => {
+          s.dimImages = on;
+        }),
+    });
+  }
   await rootReady();
   apply();
 
@@ -233,33 +285,7 @@ async function main() {
     window.addEventListener('message', (e) => {
       if (e.data === RELOAD_MESSAGE && e.source === window.parent) void reload();
     });
-    return;
   }
-
-  panel = installPanel({
-    getState: () => ({ host, mode: settings.mode, dimImages: settings.dimImages, active: engineOn, reason: reason() }),
-    toggleSite: () =>
-      change((s) => {
-        if (engineOn) {
-          s.disabledHosts = setMember(s.disabledHosts, host, true);
-          s.forcedHosts = setMember(s.forcedHosts, host, false);
-        } else {
-          const wasDisabled = s.disabledHosts.includes(host);
-          s.disabledHosts = setMember(s.disabledHosts, host, false);
-          // Removing a block is enough if the site would be darkened anyway; otherwise force it.
-          const darkenedNow = s.mode !== 'off' && (s.mode === 'on' || (s.mode === 'auto' && systemDark.matches)) && !nativeDark;
-          if (!wasDisabled || !darkenedNow) s.forcedHosts = setMember(s.forcedHosts, host, true);
-        }
-      }),
-    setMode: (mode: Mode) =>
-      change((s) => {
-        s.mode = mode;
-      }),
-    setDimImages: (on: boolean) =>
-      change((s) => {
-        s.dimImages = on;
-      }),
-  });
 }
 
 void main();
