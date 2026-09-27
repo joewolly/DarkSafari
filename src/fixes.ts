@@ -2,7 +2,7 @@
  * Dark Reader's per-site fixes: selectors to invert and extra CSS for sites the engine
  * alone doesn't get right. Only the blocks that match the current page are parsed.
  */
-import { COMMON, DATA, INDEX, OFFSETS, WILD } from 'darksafari:fixes-data';
+import { COMMON, PACKED, WILD } from 'darksafari:fixes-data';
 
 export interface SiteFix {
   url: string[];
@@ -22,7 +22,7 @@ const COMMANDS: Record<string, keyof SiteFix> = {
   'IGNORE CSS URL': 'ignoreCSSUrl',
 };
 
-function emptyFix(): SiteFix {
+export function emptyFix(): SiteFix {
   return { url: [], invert: [], css: '', ignoreInlineStyle: [], ignoreImageAnalysis: [], ignoreCSSUrl: [], disableStyleSheetsProxy: false };
 }
 
@@ -112,22 +112,46 @@ export function isURLMatched(url: string, pattern: string): boolean {
   return true;
 }
 
+interface Unpacked {
+  data: string;
+  offsets: number[];
+  index: string;
+}
+
+let unpacked: Promise<Unpacked | null> | null = null;
+
+/** Decompress the site fixes once per page. Null if the browser can't (Safari < 16.4). */
+function unpack(): Promise<Unpacked | null> {
+  unpacked ??= (async () => {
+    try {
+      const bytes = Uint8Array.from(atob(PACKED), (c) => c.charCodeAt(0));
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      const [data, offsets, index] = JSON.parse(await new Response(stream).text());
+      return { data, offsets, index };
+    } catch (error) {
+      console.warn('DarkSafari: site fixes unavailable', error);
+      return null;
+    }
+  })();
+  return unpacked;
+}
+
 /** Block indices whose patterns might match this hostname (every dot-suffix of it). */
-function candidates(hostname: string): number[] {
+function candidates(index: string, hostname: string): number[] {
   const found = new Set<number>(WILD);
   const parts = hostname.toLowerCase().split('.');
   for (let i = 0; i < parts.length; i++) {
     const key = `\n${parts.slice(i).join('.')}\t`;
-    const at = INDEX.indexOf(key);
+    const at = index.indexOf(key);
     if (at < 0) continue;
-    const end = INDEX.indexOf('\n', at + key.length);
-    for (const n of INDEX.slice(at + key.length, end).split(',')) found.add(Number(n));
+    const end = index.indexOf('\n', at + key.length);
+    for (const n of index.slice(at + key.length, end).split(',')) found.add(Number(n));
   }
   return [...found].sort((a, b) => a - b);
 }
 
 /** The common fix plus every site fix matching `url`, merged into one. */
-export function getFixFor(url: string): SiteFix {
+export async function getFixFor(url: string): Promise<SiteFix> {
   const hostname = (() => {
     try {
       return new URL(url).hostname;
@@ -136,9 +160,12 @@ export function getFixFor(url: string): SiteFix {
     }
   })();
   const fixes = [parseBlock(COMMON)];
-  for (const i of candidates(hostname)) {
-    const fix = parseBlock(DATA.slice(OFFSETS[i], OFFSETS[i + 1]));
-    if (fix.url.some((pattern) => isURLMatched(url, pattern))) fixes.push(fix);
+  const packed = await unpack();
+  if (packed) {
+    for (const i of candidates(packed.index, hostname)) {
+      const fix = parseBlock(packed.data.slice(packed.offsets[i], packed.offsets[i + 1]));
+      if (fix.url.some((pattern) => isURLMatched(url, pattern))) fixes.push(fix);
+    }
   }
   const merged = emptyFix();
   for (const f of fixes) {
