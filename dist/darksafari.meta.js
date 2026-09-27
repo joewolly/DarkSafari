@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DarkSafari
 // @namespace    https://github.com/joewolly/DarkSafari
-// @version      0.2.4
+// @version      0.2.5
 // @description  Free dark mode for every website in Safari. Follows your system appearance and leaves sites that are already dark alone. Powered by the Dark Reader engine.
 // @author       DarkSafari contributors
 // @license      MIT

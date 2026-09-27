@@ -164,6 +164,7 @@ test.describe('system dark', () => {
     await expect.poll(() => blend('wrapped')).toBe('normal');
     await expect.poll(() => blend('direct')).toBe('normal');
     await expect.poll(() => blend('late')).toBe('normal');
+    await expect.poll(() => blend('text-only')).toBe('normal');
 
     // Turning the site off restores the page's own blend modes.
     await page.keyboard.press('Control+Alt+KeyD');
