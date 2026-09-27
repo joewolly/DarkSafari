@@ -1,6 +1,6 @@
 # Third-party notices
 
-`dist/darksafari.user.js` bundles the following software.
+`dist/darksafari.user.js` bundles the following software, including Dark Reader's site-fix list (`vendor/dynamic-theme-fixes.config`) and a port of its URL-matching code (`src/fixes.ts`).
 
 ## Dark Reader
 

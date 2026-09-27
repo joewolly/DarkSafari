@@ -1,24 +1,41 @@
 import { disable as disableEngine, enable as enableEngine, setFetchMethod } from 'darkreader';
 import { isNativelyDark } from './detect';
 import { gmFetch } from './fetch';
+import { getFixFor, type SiteFix } from './fixes';
 import { installPanel } from './panel';
 import { loadSettings, normalizeHost, setMember, updateSettings, type Mode, type Settings } from './settings';
+import { readSnapshot, settingsFromSnapshot, writeSnapshot, type Snapshot } from './snapshot';
 
 const BACKGROUND = '#181a1b';
 const TEXT = '#e8e6e3';
 const THEME = { mode: 1 as const, darkSchemeBackgroundColor: BACKGROUND, darkSchemeTextColor: TEXT };
-const DIM_FIX = {
-  css: 'img, video, picture, canvas { filter: brightness(88%) contrast(105%); }',
-  invert: [],
-  ignoreInlineStyle: [],
-  ignoreImageAnalysis: [],
-  disableStyleSheetsProxy: false,
-  ignoreCSSUrl: [],
-};
+const DIM_CSS = 'img, video, picture, canvas { filter: brightness(88%) contrast(105%); }';
 const ANTI_FLASH_ID = 'darksafari-antiflash';
+const RELOAD_MESSAGE = 'darksafari:reload';
 
-const host = normalizeHost(location.hostname);
+const isTop = window.top === window;
+
+/** The site the user is visiting. Inside an iframe, that's the top-level page's site. */
+function topHostname(): string {
+  if (isTop) return location.hostname;
+  try {
+    return window.top!.location.hostname;
+  } catch {
+    // Cross-origin parent: fall back to what the browser tells us about our ancestors.
+  }
+  const origins = location.ancestorOrigins;
+  const referrer = origins?.length ? origins[origins.length - 1] : document.referrer;
+  try {
+    return new URL(referrer).hostname;
+  } catch {
+    return location.hostname;
+  }
+}
+
+const host = normalizeHost(topHostname());
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
+
+let antiFlashObserver: MutationObserver | null = null;
 
 /**
  * Settings load asynchronously, so paint a dark background right away when we will
@@ -44,20 +61,33 @@ function addAntiFlash() {
   antiFlashObserver = observer;
 }
 
-let antiFlashObserver: MutationObserver | null = null;
-
 function removeAntiFlash() {
   antiFlashObserver?.disconnect();
   antiFlashObserver = null;
   document.getElementById(ANTI_FLASH_ID)?.remove();
 }
 
-if (systemDark.matches) addAntiFlash();
+/** Resolves once <html> exists; at document-start it sometimes doesn't yet. */
+function rootReady(): Promise<void> {
+  if (document.documentElement) return Promise.resolve();
+  return new Promise((resolve) => {
+    const observer = new MutationObserver(() => {
+      if (!document.documentElement) return;
+      observer.disconnect();
+      resolve();
+    });
+    observer.observe(document, { childList: true });
+  });
+}
 
 let settings: Settings;
+let settingsLoaded = false;
+/** Whether this document looks dark on its own (cached per site for top-level pages). */
 let nativeDark = false;
 let engineOn = false;
 let engineDim: boolean | null = null;
+let siteFix: SiteFix | null = null;
+let panel: { refresh(): void } | null = null;
 
 function wantsDark(): boolean {
   return settings.mode === 'on' || (settings.mode === 'auto' && systemDark.matches);
@@ -78,10 +108,15 @@ function reason(): string {
   return 'Darkened automatically.';
 }
 
+function engineFix(dim: boolean): SiteFix {
+  siteFix ??= getFixFor(location.href);
+  return dim ? { ...siteFix, css: `${siteFix.css}\n${DIM_CSS}` } : siteFix;
+}
+
 function apply() {
   if (shouldDarken()) {
     if (!engineOn || engineDim !== settings.dimImages) {
-      enableEngine(THEME, settings.dimImages ? DIM_FIX : undefined);
+      enableEngine(THEME, engineFix(settings.dimImages));
       engineOn = true;
       engineDim = settings.dimImages;
     }
@@ -93,48 +128,84 @@ function apply() {
     engineDim = null;
     removeAntiFlash();
   }
+  if (isTop && settingsLoaded) writeSnapshot(snapshot());
   panel?.refresh();
 }
 
-/** Check whether the page is dark on its own; cache the answer per site. */
+function snapshot(): Snapshot {
+  const site = settings.disabledHosts.includes(host)
+    ? 'disabled'
+    : settings.forcedHosts.includes(host)
+      ? 'forced'
+      : nativeDark
+        ? 'dark'
+        : '';
+  return { mode: settings.mode, dim: settings.dimImages, site };
+}
+
+/** Ask every frame inside this document to re-read settings (they can't see our changes). */
+function notifyFrames() {
+  for (let i = 0; i < window.frames.length; i++) {
+    try {
+      window.frames[i].postMessage(RELOAD_MESSAGE, '*');
+    } catch {
+      // Frame went away.
+    }
+  }
+}
+
+/** Check whether the page is dark on its own; top-level pages cache the answer per site. */
 async function detect() {
   if (settings.forcedHosts.includes(host) || !wantsDark()) return;
   const dark = isNativelyDark();
   if (dark === nativeDark) return;
   nativeDark = dark;
   apply();
-  settings = await updateSettings((s) => (s.darkHosts = setMember(s.darkHosts, host, dark)));
+  if (isTop) settings = await updateSettings((s) => (s.darkHosts = setMember(s.darkHosts, host, dark)));
 }
 
 async function reload() {
   settings = await loadSettings();
+  if (isTop) nativeDark = settings.darkHosts.includes(host) || nativeDark;
   apply();
+  notifyFrames();
 }
 
 async function change(fn: (s: Settings) => void) {
   settings = await updateSettings(fn);
   apply();
+  notifyFrames();
 }
 
-let panel: { refresh(): void } | null = null;
-
-/** Resolves once <html> exists; at document-start it sometimes doesn't yet. */
-function rootReady(): Promise<void> {
-  if (document.documentElement) return Promise.resolve();
-  return new Promise((resolve) => {
-    const observer = new MutationObserver(() => {
-      if (!document.documentElement) return;
-      observer.disconnect();
-      resolve();
-    });
-    observer.observe(document, { childList: true });
+/**
+ * Decide before the async settings arrive. Top-level pages keep a tiny snapshot of the
+ * last decision in the site's own storage, so even "On" mode with a light system (or a
+ * site you turned off) is right from the first paint.
+ */
+function startEarly() {
+  const snap = isTop ? readSnapshot() : null;
+  if (!snap) {
+    if (systemDark.matches) addAntiFlash();
+    return;
+  }
+  settings = settingsFromSnapshot(snap, host);
+  nativeDark = snap.site === 'dark';
+  if (!shouldDarken()) return;
+  addAntiFlash();
+  void rootReady().then(() => {
+    if (!settingsLoaded) apply();
   });
 }
 
 async function main() {
+  // Hidden and pixel-sized frames (trackers, ad plumbing) aren't worth theming.
+  if (!isTop && (window.innerWidth < 60 || window.innerHeight < 30)) return;
   setFetchMethod(gmFetch);
+  startEarly();
+
   settings = await loadSettings();
-  nativeDark = settings.darkHosts.includes(host);
+  settingsLoaded = true;
+  if (isTop) nativeDark = settings.darkHosts.includes(host);
   await rootReady();
   apply();
 
@@ -157,6 +228,13 @@ async function main() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void reload();
   });
+
+  if (!isTop) {
+    window.addEventListener('message', (e) => {
+      if (e.data === RELOAD_MESSAGE && e.source === window.parent) void reload();
+    });
+    return;
+  }
 
   panel = installPanel({
     getState: () => ({ host, mode: settings.mode, dimImages: settings.dimImages, active: engineOn, reason: reason() }),

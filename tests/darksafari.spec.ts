@@ -23,9 +23,9 @@ function fixture(url: string): { body: string; type: string } | null {
 }
 
 /** Install an in-memory GM API (like the Userscripts extension provides), then the userscript. */
-async function install(page: Page, settings: Record<string, unknown> = {}) {
+async function install(page: Page, settings: Record<string, unknown> = {}, gmDelayMs = 0) {
   // GM.xmlHttpRequest runs outside the page (no CORS), like the real extension.
-  await page.route(/^https:\/\/(www\.example\.com|cdn\.example\.net)\//, (route) => {
+  await page.route(/^https:\/\//, (route) => {
     const f = fixture(route.request().url());
     return f ? route.fulfill({ contentType: f.type, body: f.body }) : route.fulfill({ status: 404 });
   });
@@ -33,20 +33,28 @@ async function install(page: Page, settings: Record<string, unknown> = {}) {
     const f = fixture(url);
     return f ? { status: 200, text: f.body } : { status: 404, text: '' };
   });
-  await page.addInitScript((initial) => {
-    const store: Record<string, unknown> = { settings: initial };
-    (window as any).__gmStore = store;
-    (window as any).GM = {
-      getValue: async (k: string, d?: unknown) => (k in store ? structuredClone(store[k]) : d),
-      setValue: async (k: string, v: unknown) => {
-        store[k] = structuredClone(v);
+  // One store for the whole page and all its frames, like the extension's storage.
+  const store: Record<string, unknown> = { settings };
+  stores.set(page, store);
+  await page.exposeFunction('__gmGet', (k: string) => (k in store ? JSON.stringify(store[k]) : undefined));
+  await page.exposeFunction('__gmSet', (k: string, v: string) => {
+    store[k] = JSON.parse(v);
+  });
+  await page.addInitScript((delay) => {
+    const w = window as any;
+    w.GM = {
+      getValue: async (k: string, d?: unknown) => {
+        if (delay) await new Promise((r) => setTimeout(r, delay));
+        const v = await w.__gmGet(k);
+        return v === undefined ? d : JSON.parse(v);
       },
+      setValue: (k: string, v: unknown) => w.__gmSet(k, JSON.stringify(v)),
       xmlHttpRequest: async ({ url }: { url: string }) => {
-        const r = await (window as any).__gmFetch(url);
+        const r = await w.__gmFetch(url);
         return { status: r.status, statusText: '', response: new Blob([r.text]), responseText: r.text };
       },
     };
-  }, settings);
+  }, gmDelayMs);
   await page.addInitScript(SCRIPT);
 }
 
@@ -62,7 +70,8 @@ async function bgLuminance(page: Page, selector = 'body'): Promise<number> {
 }
 
 const hasEngineStyles = (page: Page) => page.evaluate(() => !!document.querySelector('style.darkreader:not(.darkreader--fallback)'));
-const storedSettings = (page: Page) => page.evaluate(() => (window as any).__gmStore.settings);
+const stores = new WeakMap<Page, Record<string, unknown>>();
+const storedSettings = async (page: Page): Promise<any> => stores.get(page)!.settings;
 
 test.describe('system dark', () => {
   test.use({ colorScheme: 'dark' });
@@ -162,5 +171,102 @@ test.describe('auto mode follows the system', () => {
     await install(page, { mode: 'on' });
     await page.goto(url('light.html'));
     await expect.poll(() => bgLuminance(page)).toBeLessThan(0.05);
+  });
+});
+
+/** All CSS Dark Reader generated for the top document. */
+const engineCSS = (page: Page) =>
+  page.evaluate(() => Array.from(document.querySelectorAll('style.darkreader'), (s) => s.textContent).join('\n'));
+
+test.describe('site fixes', () => {
+  test.use({ colorScheme: 'dark' });
+
+  test('applies the matching Dark Reader fix for a site', async ({ page }) => {
+    await install(page);
+    await page.goto('https://github.com/light.html');
+    await expect.poll(() => engineCSS(page)).toContain('footer/github-logo.svg');
+  });
+
+  test('does not apply another site’s fix', async ({ page }) => {
+    await install(page);
+    await page.goto(url('light.html'));
+    await expect.poll(() => hasEngineStyles(page)).toBe(true);
+    expect(await engineCSS(page)).not.toContain('footer/github-logo.svg');
+  });
+
+  test('follows Dark Reader URL rules: "github.com" does not cover other subdomains', async ({ page }) => {
+    await install(page);
+    await page.goto('https://gist.github.com/light.html');
+    await expect.poll(() => hasEngineStyles(page)).toBe(true);
+    expect(await engineCSS(page)).not.toContain('footer/github-logo.svg');
+  });
+});
+
+test.describe('frames', () => {
+  test.use({ colorScheme: 'dark' });
+
+  const frameLuminance = async (page: Page) => {
+    const frame = page.frames().find((f) => f.url().startsWith(CDN));
+    if (!frame) return NaN;
+    return frame.evaluate(() => {
+      const c = getComputedStyle(document.body).backgroundColor.match(/[\d.]+/g)!.map(Number);
+      return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+    });
+  };
+
+  test('darkens embedded frames', async ({ page }) => {
+    await install(page);
+    await page.goto(url('with-frame.html'));
+    await expect.poll(() => frameLuminance(page)).toBeLessThan(0.2);
+  });
+
+  test('frames follow the top site being turned off, live', async ({ page }) => {
+    await install(page);
+    await page.goto(url('with-frame.html'));
+    await expect.poll(() => frameLuminance(page)).toBeLessThan(0.2);
+
+    await page.keyboard.press('Control+Alt+KeyD');
+    await page.locator('darksafari-panel').getByRole('button', { name: /turn off/ }).click();
+    await expect.poll(() => frameLuminance(page)).toBeGreaterThan(0.9);
+  });
+
+  test('frames on a site the user turned off stay untouched', async ({ page }) => {
+    await install(page, { disabledHosts: [HOST] });
+    await page.goto(url('with-frame.html'));
+    await page.waitForLoadState('load');
+    await page.waitForTimeout(300);
+    expect(await frameLuminance(page)).toBeGreaterThan(0.9);
+  });
+});
+
+test.describe('first paint uses the cached decision', () => {
+  // Slow settings storage, so anything dark at DOMContentLoaded came from the snapshot.
+  const SLOW = 1500;
+  const bodyLumAtDCL = (page: Page) =>
+    page.evaluate(() => {
+      const c = getComputedStyle(document.body).backgroundColor.match(/[\d.]+/g)!.map(Number);
+      return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+    });
+
+  test('"On" mode with a light system is dark before settings load on repeat visits', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await install(page, { mode: 'on' }, SLOW);
+    await page.goto(url('light.html'), { waitUntil: 'domcontentloaded' });
+    // First visit: no snapshot yet, so the page starts light.
+    expect(await bodyLumAtDCL(page)).toBeGreaterThan(0.9);
+    await expect.poll(() => bgLuminance(page), { timeout: 10000 }).toBeLessThan(0.05);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    expect(await bodyLumAtDCL(page)).toBeLessThan(0.2);
+  });
+
+  test('a site the user turned off does not start dark on repeat visits', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await install(page, { disabledHosts: [HOST] }, SLOW);
+    await page.goto(url('light.html'));
+    await page.waitForTimeout(SLOW + 300);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    expect(await bodyLumAtDCL(page)).toBeGreaterThan(0.9);
   });
 });
